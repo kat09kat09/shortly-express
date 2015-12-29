@@ -4,6 +4,9 @@ var partials = require('express-partials');
 var bodyParser = require('body-parser');
 var session = require('express-session');
 var credentials = require('./credentials');
+var passport = require('passport');
+var GitHubStrategy = require('passport-github').Strategy;
+
 
 var db = require('./app/config');
 var Users = require('./app/collections/users');
@@ -26,7 +29,6 @@ app.use(bodyParser.urlencoded({ extended: true}));
 var genuuid = function() {
   return require('crypto').randomBytes(48).toString('hex');
 };
-
 app.use(session({
   genid: function (req) {
     return genuuid();
@@ -35,38 +37,92 @@ app.use(session({
   resave: false,
   saveUninitialized: true
 }));
+app.use(passport.initialize());
+app.use(passport.session());
+
+passport.serializeUser(function(user, done) {
+  done(null, user);
+});
+
+passport.deserializeUser(function(obj, done) {
+  done(null, obj);
+});
+
+passport.use(new GitHubStrategy({
+    clientID: credentials.passport.github.clientID,
+    clientSecret: credentials.passport.github.clientSecret,
+    callbackURL: "http://localhost:4568/auth/github/callback"
+  },
+
+
+  function(accessToken, refreshToken, profile, done) {
+    new User({ githubId: profile.id }).fetch().then(function(user) {
+      if (!user) {
+
+        var addUser = new User({
+          githubId: profile.id
+        });
+
+        addUser.save().then(function(newUser) {
+          Users.add(newUser);
+          return done(null, user);
+        });
+      } else {
+        return done(null, user);
+      }
+    });
+    // new User( User.findOrCreate({ githubId: profile.id }, function (err, user) {
+    //   return done(err, user);
+    // });
+  }
+));
 app.use(express.static(__dirname + '/public'));
 
-var checkUser = function (req) {
-  return req.session.isAuthenticated === true;
-};
+// var checkUser = function (req) {
+//   return req.session.isAuthenticated === true;
+// };
 
-app.get('/', function(req, res) {
-  if(!checkUser(req)) {
-    res.redirect(303, '/login');
-  } else {
+app.get('/auth/github',
+  passport.authenticate('github')
+  // function(req, res){
+  //   // The request will be redirected to GitHub for authentication, so this
+  //   // function will not be called.
+  // }
+);
+
+app.get('/auth/github/callback',
+  passport.authenticate('github', { failureRedirect: '/failed' }),
+  function(req, res) {
+    res.redirect('/');
+  });
+
+app.get('/', ensureAuthenticated, function(req, res) {
+  // if(!checkUser(req)) {
+  //   res.redirect(303, '/login');
+  // } else {
+
     res.render('index');
-  }
+  // }
 });
 
-app.get('/create',
+app.get('/create', ensureAuthenticated,
 function(req, res) {
-  if(!checkUser(req)) {
-    res.redirect(303, '/login');
-  } else {
+  // if(!checkUser(req)) {
+  //   res.redirect(303, '/login');
+  // } else {
     res.render('create');
-  }
+  // }
 });
 
-app.get('/links',
+app.get('/links', ensureAuthenticated,
 function(req, res) {
-  if(!checkUser(req)) {
-    res.redirect(303, '/login');
-  } else {
+  // if(!checkUser(req)) {
+  //   res.redirect(303, '/login');
+  // } else {
     Links.reset().fetch().then(function(links) {
       res.send(200, links.models);
     });
-  }
+  // }
 });
 
 app.get('/login',
@@ -74,15 +130,15 @@ function(req, res) {
   res.render('login');
 });
 
-app.get('/signup', function (req, res) {
-  res.render('signup');
-});
+// app.get('/signup', function (req, res) {
+//   res.render('signup');
+// });
 
-app.post('/links',
+app.post('/links', ensureAuthenticated,
 function(req, res) {
-  if(!checkUser(req)) {
-    res.redirect(303, '/login');
-  } else {
+  // if(!checkUser(req)) {
+  //   res.redirect(303, '/login');
+  // } else {
     var uri = req.body.url;
 
     if (!util.isValidUrl(uri)) {
@@ -113,7 +169,7 @@ function(req, res) {
         });
       }
     });
-  }
+  // }
 });
 
 /************************************************************/
@@ -124,39 +180,48 @@ function(req, res) {
   //if user exists and credentials are good
     //set isAuthenticated to true
     //redirect to whatever page
-app.post('/login', function (req, res) {
-  var userInst = {
-    username: req.body.username,
-    password: req.body.password
-  };
+// app.post('/login', function (req, res) {
+//   var userInst = {
+//     username: req.body.username,
+//     password: req.body.password
+//   };
+//
+//   new User({ username: userInst.username }).fetch().then(function(user) {
+//     if (!user) {
+//       res.redirect(303, '/login');
+//     } else {
+//       if (bcrypt.compareSync(userInst.password, user.get('password'))) {
+//         req.session.isAuthenticated = true;
+//         var backUrl = req.header('Referer') || '/';
+//         res.redirect(backUrl);
+//       }
+//     }
+//   });
+// });
 
-  new User({ username: userInst.username }).fetch().then(function(user) {
-    if (!user) {
-      res.redirect(303, '/login');
-    } else {
-      if (bcrypt.compareSync(userInst.password, user.get('password'))) {
-        req.session.isAuthenticated = true;
-        var backUrl = req.header('Referer') || '/';
-        res.redirect(backUrl);
-      }
-    }
-  });
+// app.get('/logout', function (req,res) {
+//   req.session.isAuthenticated = false;
+//   res.redirect(303, '/');
+// });
+app.get('/logout', function(req, res){
+  req.logout();
+  res.redirect('/');
 });
 
-app.get('/logout', function (req,res) {
-  req.session.isAuthenticated = false;
-  res.redirect(303, '/');
-});
+function ensureAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) { return next(); }
+  res.redirect('/login')
+}
 
-app.post('/signup', function (req, res) {
-  new User({
-    username: req.body.username,
-    password: req.body.password
-  }).save().then(function() {
-    req.session.isAuthenticated = true;
-    res.redirect(303, '/');
-  });
-});
+// app.post('/signup', function (req, res) {
+//   new User({
+//     username: req.body.username,
+//     password: req.body.password
+//   }).save().then(function() {
+//     req.session.isAuthenticated = true;
+//     res.redirect(303, '/');
+//   });
+// });
 /************************************************************/
 // Handle the wildcard route last - if all other routes fail
 // assume the route is a short code and try and handle it here.
